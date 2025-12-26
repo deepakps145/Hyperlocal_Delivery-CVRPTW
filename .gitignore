@@ -1,4 +1,6 @@
-index.html
 frontend/node_modules/
 backend/.env
-graphhopper
+graphhopper/graph-cache/
+graphhopper/logs/
+graphhopper/graphhopper-web-11.0.jar
+graphhopper/india-*.osm.pbf

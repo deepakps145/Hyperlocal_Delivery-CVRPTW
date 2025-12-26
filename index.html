@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GraphHopper Local Test</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; display: flex; height: 100vh; }
+        
+        #sidebar {
+            width: 300px;
+            background: #f8f9fa;
+            padding: 20px;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        #map { flex-grow: 1; height: 100%; }
+
+        h2 { margin-top: 0; color: #333; }
+
+        .control-group {
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+
+        label { font-weight: bold; display: block; margin-bottom: 5px; font-size: 14px;}
+        
+        select, button {
+            width: 100%;
+            padding: 8px;
+            margin-top: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        button {
+            background-color: #10B981;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            border: none;
+        }
+
+        button:hover { background-color: #059669; }
+
+        #status {
+            margin-top: 10px;
+            padding: 10px;
+            background: #eef2ff;
+            border-radius: 4px;
+            font-size: 14px;
+            line-height: 1.5;
+            min-height: 60px;
+        }
+
+        .error { color: red; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>GH Tester</h2>
+        
+        <div class="control-group">
+            <label>Vehicle Profile</label>
+            <select id="vehicle">
+                <option value="bike">Bike (Scooter)</option>
+                <option value="car">Car</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Route Stats</label>
+            <div id="status">Click on the map to set Start point...</div>
+        </div>
+
+        <button onclick="resetMap()">Clear Map</button>
+        
+        <div style="font-size: 12px; color: #666; margin-top: auto;">
+            Connected to: <br>
+            <code>http://localhost:8989</code>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // 1. Initialize Map (Centered on Bangalore/India default)
+        const map = L.map('map').setView([12.9716, 77.5946], 13);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        // State variables
+        let startMarker = null;
+        let endMarker = null;
+        let routeLayer = null;
+
+        // 2. Click Handler
+        map.on('click', function(e) {
+            if (!startMarker) {
+                // Set Start
+                startMarker = L.marker(e.latlng, {draggable: true}).addTo(map).bindPopup("Start").openPopup();
+                document.getElementById('status').innerHTML = "<b>Start Set.</b><br>Click map to set Destination.";
+            } else if (!endMarker) {
+                // Set End
+                endMarker = L.marker(e.latlng, {draggable: true}).addTo(map).bindPopup("End").openPopup();
+                calculateRoute();
+            } else {
+                // Reset if clicked a 3rd time
+                resetMap();
+                startMarker = L.marker(e.latlng).addTo(map);
+                document.getElementById('status').innerHTML = "Start reset.<br>Click for Destination.";
+            }
+        });
+
+        // 3. The Function calling your Local GraphHopper
+        async function calculateRoute() {
+            if (!startMarker || !endMarker) return;
+
+            const vehicle = document.getElementById('vehicle').value;
+            const statusDiv = document.getElementById('status');
+            
+            statusDiv.innerHTML = "Calculating route...";
+
+            // GraphHopper API URL
+            const startLat = startMarker.getLatLng().lat;
+            const startLng = startMarker.getLatLng().lng;
+            const endLat = endMarker.getLatLng().lat;
+            const endLng = endMarker.getLatLng().lng;
+
+            // Notice: points_encoded=false makes it return readable coordinates instead of a cryptic string
+            const url = `http://localhost:8989/route?point=${startLat},${startLng}&point=${endLat},${endLng}&profile=${vehicle}&locale=en&calc_points=true&points_encoded=false`;
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (response.status !== 200 || data.message) {
+                    throw new Error(data.message || "Unknown error");
+                }
+
+                const path = data.paths[0];
+                const distanceKm = (path.distance / 1000).toFixed(2);
+                const timeMin = (path.time / 1000 / 60).toFixed(0);
+
+                // 4. Draw the Line
+                if (routeLayer) map.removeLayer(routeLayer);
+
+                // GraphHopper returns [Lon, Lat], Leaflet needs [Lat, Lon]
+                const latLngs = path.points.coordinates.map(coord => [coord[1], coord[0]]);
+
+                routeLayer = L.polyline(latLngs, {
+                    color: vehicle === 'bike' ? '#10B981' : '#3B82F6', // Green for bike, Blue for car
+                    weight: 5,
+                    opacity: 0.7
+                }).addTo(map);
+
+                // Fit map to show whole route
+                map.fitBounds(routeLayer.getBounds(), {padding: [50, 50]});
+
+                statusDiv.innerHTML = `
+                    <b>Route Found!</b><br>
+                    🚗 Dist: ${distanceKm} km<br>
+                    ⏱️ Time: ${timeMin} min
+                `;
+
+            } catch (error) {
+                console.error(error);
+                statusDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+
+        // 5. Reset Function
+        function resetMap() {
+            if (startMarker) map.removeLayer(startMarker);
+            if (endMarker) map.removeLayer(endMarker);
+            if (routeLayer) map.removeLayer(routeLayer);
+            startMarker = null;
+            endMarker = null;
+            routeLayer = null;
+            document.getElementById('status').innerHTML = "Click on the map to set Start point...";
+        }
+
+        // Re-calculate if vehicle changes
+        document.getElementById('vehicle').addEventListener('change', () => {
+            if(startMarker && endMarker) calculateRoute();
+        });
+
+    </script>
+</body>
+</html>

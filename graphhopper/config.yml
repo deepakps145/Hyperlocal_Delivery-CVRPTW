@@ -1,0 +1,37 @@
+graphhopper:
+  datareader.file: india-251225.osm.pbf
+  graph.location: graph-cache
+  
+  graph.encoded_values: car_access, car_average_speed, bike_access, bike_average_speed, road_access
+
+  # Keep true for flexibility
+  ch.disable: true 
+
+  profiles:
+    - name: car
+      weighting: custom
+      custom_model:
+        distance_influence: 70
+        speed:
+          - if: true
+            limit_to: car_average_speed
+
+    - name: bike
+      weighting: custom
+      custom_model:
+        distance_influence: 70
+        speed:
+          - if: true
+            limit_to: bike_average_speed
+
+  import.osm.ignored_highways: corridor
+
+server:
+  application_connectors:
+    - type: http
+      port: 8989
+      bind_host: localhost
+  admin_connectors:
+    - type: http
+      port: 8990
+      bind_host: localhost
