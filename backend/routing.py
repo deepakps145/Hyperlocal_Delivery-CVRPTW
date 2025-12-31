@@ -159,7 +159,6 @@ def get_optimized_route(points: list, orders_data: list = None, rider_capacity: 
     
     # Construct query parameters
     params = {
-        "vehicle": "car", # or bike
         "points_encoded": "false",
         "profile": "car"
     }

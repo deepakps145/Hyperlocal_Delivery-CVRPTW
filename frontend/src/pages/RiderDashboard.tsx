@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Phone, 
   Navigation, 
@@ -36,6 +36,7 @@ export function RiderDashboard({ onBack }: RiderDashboardProps) {
   const [route, setRoute] = useState<any>(null);
   const [user, setUser] = useState<any>(null);
   const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(null);
+  const lastLocationUpdateRef = useRef(0);
 
   // Helper to refresh data
   const refreshData = async () => {
@@ -117,10 +118,9 @@ export function RiderDashboard({ onBack }: RiderDashboardProps) {
 
     if (isOnline) {
         fetchData();
-        const interval = setInterval(fetchData, 10000);
-        return () => clearInterval(interval);
+        // Removed setInterval to prevent continuous calling
     }
-  }, [isOnline, user, avoidTraffic]);
+  }, [isOnline, user]); // Removed avoidTraffic to prevent double fetch
 
 
   useEffect(() => {
@@ -130,8 +130,13 @@ export function RiderDashboard({ onBack }: RiderDashboardProps) {
       (position) => {
         const { latitude, longitude } = position.coords;
         setCurrentLocation([latitude, longitude]);
-        // Update location every time it changes (throttling might be needed in production)
-        updateRiderLocation(user.user_id, latitude, longitude).catch(console.error);
+        
+        const now = Date.now();
+        // throttle updates to once every 5s
+        if (now - lastLocationUpdateRef.current > 5000) {
+          lastLocationUpdateRef.current = now;
+          updateRiderLocation(user.user_id, latitude, longitude).catch(console.error);
+        }
       },
       (error) => console.error("Location error:", error),
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
