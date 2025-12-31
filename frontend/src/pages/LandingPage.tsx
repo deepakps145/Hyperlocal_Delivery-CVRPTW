@@ -3,7 +3,7 @@ import { Button } from '../ui/button';
 import { Card } from '../ui/card';
 
 interface LandingPageProps {
-  onNavigate: (view: 'admin' | 'rider') => void;
+  onNavigate: (view: string) => void;
 }
 
 export function LandingPage({ onNavigate }: LandingPageProps) {
@@ -53,7 +53,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
                   <p className="text-sm sm:text-base text-slate-400">Manage your delivery fleet and optimize routes in real-time</p>
                 </div>
                 <Button 
-                  onClick={() => onNavigate('admin')}
+                  onClick={() => onNavigate('admin-login')}
                   className="w-full bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/50"
                 >
                   Login to Dashboard
@@ -73,7 +73,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
                   <p className="text-sm sm:text-base text-slate-400">Access your rider dashboard and manage deliveries on the go</p>
                 </div>
                 <Button 
-                  onClick={() => onNavigate('rider')}
+                  onClick={() => onNavigate('rider-login')}
                   variant="outline"
                   className="w-full bg-slate-800 border-slate-700 text-white hover:bg-slate-700 shadow-sm"
                 >
@@ -115,6 +115,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
 
 // 3D Isometric City Map Illustration Component
 function CityMapIllustration() {
+  // use Z-axis rotation with center pivot by default
   return (
     <svg viewBox="0 0 500 500" className="w-full h-full">
       {/* Background Grid */}

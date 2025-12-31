@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Phone, 
   Navigation, 
@@ -16,6 +16,8 @@ import { Button } from '../ui/button';
 import { Card } from '../ui/card';
 import { Switch } from '../ui/switch';
 import { Badge } from '../ui/badge';
+import { MapComponent } from '../components/MapComponent';
+import { getRiderOrders, optimizeRoute, updateRiderLocation, updateOrderStatus, reportTraffic } from '../services/api';
 
 interface RiderDashboardProps {
   onBack: () => void;
@@ -23,15 +25,150 @@ interface RiderDashboardProps {
 
 export function RiderDashboard({ onBack }: RiderDashboardProps) {
   const [isOnline, setIsOnline] = useState(true);
+  const [showTraffic, setShowTraffic] = useState(false);
+  const [avoidTraffic, setAvoidTraffic] = useState(false);
   const [swipeProgress, setSwipeProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  const [orders, setOrders] = useState<any[]>([]);
+  const [route, setRoute] = useState<any>(null);
+  const [user, setUser] = useState<any>(null);
+  const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(null);
+
+  // Helper to refresh data
+  const refreshData = async () => {
+    if (!user) return;
+    try {
+      const ordersData = await getRiderOrders(user.user_id);
+      setOrders(ordersData);
+      if (ordersData.length > 0) {
+          try {
+              const routeData = await optimizeRoute(user.user_id, avoidTraffic);
+              setRoute(routeData);
+          } catch (e) {
+              console.log("No route available yet", e);
+          }
+      } else {
+        setRoute(null);
+      }
+    } catch (error) {
+      console.error("Error refreshing data:", error);
+    }
+  };
+
+  useEffect(() => {
+    if (user && orders.length > 0) {
+        refreshData();
+    }
+  }, [avoidTraffic]); // Re-optimize when avoidTraffic changes
+
+  useEffect(() => {
+    try {
+      const storedUser = localStorage.getItem('user');
+      if (storedUser) {
+        const parsedUser = JSON.parse(storedUser);
+        console.log('RiderDashboard: Loaded user:', parsedUser);
+        setUser(parsedUser);
+      } else {
+        console.warn('RiderDashboard: No user found in localStorage');
+        setError('No user session found. Please log in again.');
+      }
+    } catch (err) {
+      console.error('RiderDashboard: Error loading user:', err);
+      setError('Error loading user session');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      console.log('RiderDashboard: No user, skipping data fetch');
+      return;
+    }
+
+    const fetchData = async () => {
+      try {
+        console.log('RiderDashboard: Fetching orders for rider:', user.user_id);
+        const ordersData = await getRiderOrders(user.user_id);
+        console.log('RiderDashboard: Fetched orders:', ordersData);
+        setOrders(ordersData);
+        setError(null);
+        
+        // Try to get optimized route if there are orders
+        if (ordersData.length > 0) {
+            try {
+                const routeData = await optimizeRoute(user.user_id, avoidTraffic);
+                console.log('RiderDashboard: Fetched route:', routeData);
+                setRoute(routeData);
+            } catch (e) {
+                console.log("RiderDashboard: No route available yet", e);
+            }
+        }
+      } catch (error: any) {
+        console.error("RiderDashboard: Error fetching rider data:", error);
+        if (error.response?.status !== 401) {
+          setError(`Failed to load data: ${error.message}`);
+        }
+      }
+    };
+
+    if (isOnline) {
+        fetchData();
+        const interval = setInterval(fetchData, 10000);
+        return () => clearInterval(interval);
+    }
+  }, [isOnline, user, avoidTraffic]);
+
+
+  useEffect(() => {
+    if (!user || !isOnline) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setCurrentLocation([latitude, longitude]);
+        // Update location every time it changes (throttling might be needed in production)
+        updateRiderLocation(user.user_id, latitude, longitude).catch(console.error);
+      },
+      (error) => console.error("Location error:", error),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [user, isOnline]);
+
+  const handleReportTraffic = async () => {
+    if (!currentLocation) {
+        alert("Waiting for location...");
+        return;
+    }
+    try {
+        await reportTraffic(currentLocation[0], currentLocation[1]);
+        alert("Traffic reported at your location. Route will be re-optimized.");
+        setAvoidTraffic(true); // Enable avoidance
+        refreshData(); // Trigger re-optimization
+    } catch (e) {
+        console.error("Error reporting traffic:", e);
+        alert("Failed to report traffic");
+    }
+  };
+
+  const handleNavigate = () => {
+    if (!activeOrder) return;
+    // Open Google Maps for navigation
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${activeOrder.lat},${activeOrder.lng}`;
+    window.open(url, '_blank');
+  };
 
   const handleSwipeStart = (e: React.MouseEvent | React.TouchEvent) => {
     setIsDragging(true);
   };
 
-  const handleSwipeMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDragging) return;
+  const handleSwipeMove = async (e: React.MouseEvent | React.TouchEvent) => {
+    if (!isDragging || !activeOrder) return;
     
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const container = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -41,7 +178,29 @@ export function RiderDashboard({ onBack }: RiderDashboardProps) {
     if (progress > 0.9) {
       setSwipeProgress(0);
       setIsDragging(false);
-      // Trigger pickup confirmation
+      
+      // Determine next status
+      let nextStatus = '';
+      let message = '';
+      
+      if (activeOrder.status === 'assigned') {
+        nextStatus = 'picked-up';
+        message = 'Order Picked Up!';
+      } else if (activeOrder.status === 'picked-up' || activeOrder.status === 'in-transit') {
+        nextStatus = 'delivered';
+        message = 'Order Delivered!';
+      }
+
+      if (nextStatus) {
+        try {
+          await updateOrderStatus(activeOrder.id, nextStatus);
+          alert(message);
+          await refreshData();
+        } catch (err) {
+          console.error("Error updating status:", err);
+          alert("Failed to update status");
+        }
+      }
     }
   };
 
@@ -52,227 +211,166 @@ export function RiderDashboard({ onBack }: RiderDashboardProps) {
     }
   };
 
-  const upcomingDeliveries = [
-    { id: 1, location: 'Drop at HSR Layout', address: 'Sector 2, HSR Layout, Bangalore', distance: '3.8 km', type: 'Drop' },
-    { id: 2, location: 'Drop at Koramangala', address: '5th Block, Koramangala, Bangalore', distance: '5.2 km', type: 'Drop' },
-  ];
+  const activeOrder = orders.find(o => o.status === 'assigned' || o.status === 'picked-up' || o.status === 'in-transit');
+  const upcomingDeliveries = orders.filter(o => o.id !== activeOrder?.id && o.status !== 'delivered' && o.status !== 'cancelled');
+
+  // Show loading state
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="text-white text-xl">Loading Rider Dashboard...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center max-w-md p-8">
+          <div className="text-red-500 text-xl mb-4">⚠️ Error</div>
+          <div className="text-white mb-6">{error}</div>
+          <Button onClick={onBack} className="bg-emerald-500 hover:bg-emerald-600">
+            Go Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950">
-      {/* Desktop Layout */}
-      <div className="h-screen flex flex-col">
-        {/* Header Section - Full Width */}
-        <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 px-6 lg:px-12 py-6">
-          <div className="flex items-center justify-between mb-8">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onBack}
-              className="text-white hover:bg-white/20"
-            >
-              <ArrowLeft className="w-6 h-6" />
-            </Button>
-            <div className="flex items-center gap-3">
-              <span className="text-white text-lg">Online</span>
-              <Switch 
-                checked={isOnline} 
-                onCheckedChange={setIsOnline}
-                className="data-[state=checked]:bg-white"
-              />
-            </div>
+    <div className="h-screen bg-slate-950 relative overflow-hidden">
+      {/* Map Background */}
+      <div className="absolute inset-0 z-0">
+        <MapComponent 
+          orders={orders} 
+          route={route} 
+          riders={user ? [{
+              id: user.user_id, 
+              current_lat: currentLocation ? currentLocation[0] : (user.current_lat || 12.9716), 
+              current_lng: currentLocation ? currentLocation[1] : (user.current_lng || 77.5946), 
+              name: user.name, 
+              status: "busy"
+          }] : []} 
+          center={currentLocation || undefined}
+          zoom={15}
+          showTraffic={showTraffic}
+        />
+      </div>
+
+      {/* Top Controls Overlay */}
+      <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-start pointer-events-none">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onBack}
+          className="bg-slate-900/50 text-white hover:bg-slate-900 pointer-events-auto backdrop-blur-sm"
+        >
+          <ArrowLeft className="w-6 h-6" />
+        </Button>
+
+        <Card className="bg-slate-900/90 border-slate-700 p-3 pointer-events-auto backdrop-blur-sm space-y-3 min-w-[200px]">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-slate-300 text-sm">Online Status</span>
+            <Switch checked={isOnline} onCheckedChange={setIsOnline} />
           </div>
-
-          <div className="max-w-7xl mx-auto">
-            <div className="grid lg:grid-cols-[300px,1fr] gap-6">
-              {/* Profile Section */}
-              <div className="flex items-center gap-4">
-                <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center flex-shrink-0">
-                  <User className="w-10 h-10 text-emerald-600" />
-                </div>
-                <div>
-                  <h2 className="text-white text-2xl mb-1">Rahul Mehta</h2>
-                  <div className="flex items-center gap-2 text-emerald-100">
-                    <div className="w-2 h-2 bg-white rounded-full"></div>
-                    <span>Ready for deliveries</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Earnings Summary Card - Wider on Desktop */}
-              <Card className="bg-slate-900/90 border-0 p-6">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                  <div>
-                    <div className="flex items-center gap-2 text-slate-400 text-sm mb-2">
-                      <DollarSign className="w-4 h-4" />
-                      Today's Earnings
-                    </div>
-                    <div className="text-3xl text-white">₹847</div>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 text-slate-400 text-sm mb-2">
-                      <Package className="w-4 h-4" />
-                      Trips Completed
-                    </div>
-                    <div className="text-3xl text-white">12</div>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 text-slate-400 text-sm mb-2">
-                      <Star className="w-4 h-4" />
-                      Rating
-                    </div>
-                    <div className="text-3xl text-white">4.8</div>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 text-slate-400 text-sm mb-2">
-                      <TrendingUp className="w-4 h-4" />
-                      On-Time Rate
-                    </div>
-                    <div className="text-3xl text-white">98%</div>
-                  </div>
-                </div>
-              </Card>
-            </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-slate-300 text-sm">Show Traffic</span>
+            <Switch checked={showTraffic} onCheckedChange={setShowTraffic} />
           </div>
-        </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-slate-300 text-sm">Avoid Traffic</span>
+            <Switch checked={avoidTraffic} onCheckedChange={setAvoidTraffic} />
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            className="w-full border-red-500/50 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+            onClick={handleReportTraffic}
+          >
+            Report Traffic Here
+          </Button>
+        </Card>
+      </div>
 
-        {/* Content Section - Full Width with Grid */}
-        <div className="flex-1 overflow-auto px-6 lg:px-12 py-8">
-          <div className="max-w-7xl mx-auto">
-            <div className="grid lg:grid-cols-2 gap-8">
-              {/* Left Column - Active Delivery */}
-              <div className="space-y-6">
-                {/* Active Delivery Header */}
-                <div className="flex items-center justify-between">
-                  <h3 className="text-slate-400 text-sm uppercase tracking-wider">Active Delivery</h3>
-                  <Badge className="bg-blue-600 text-white border-0 px-4 py-1">
-                    In Transit
+      {/* Bottom Panel - Active Order */}
+      <div className="absolute bottom-0 left-0 right-0 z-10 p-4 pointer-events-none flex justify-center">
+        <div className="w-full max-w-md pointer-events-auto space-y-4">
+           {activeOrder ? (
+             <Card className="bg-slate-900/95 border-emerald-600/50 border-2 p-6 shadow-xl backdrop-blur-md">
+                <div className="flex items-center justify-between mb-4">
+                  <Badge className="bg-blue-600 text-white border-0 px-3 py-1">
+                    {activeOrder.status}
                   </Badge>
+                  <div className="flex items-center gap-2">
+                      <Button 
+                        size="sm" 
+                        className="bg-blue-600 hover:bg-blue-700 text-white h-8"
+                        onClick={handleNavigate}
+                      >
+                        <Navigation className="w-3 h-3 mr-1" />
+                        Navigate
+                      </Button>
+                      <div className="text-slate-400 text-sm">#{activeOrder.id}</div>
+                  </div>
+                </div>
+                
+                <h2 className="text-white text-xl mb-2">{activeOrder.customer_name}</h2>
+                <div className="flex items-start gap-3 mb-4">
+                    <MapPin className="w-5 h-5 text-emerald-500 mt-1 flex-shrink-0" />
+                    <div className="text-slate-300 text-sm">{activeOrder.delivery_address}</div>
                 </div>
 
-                {/* Active Delivery Card */}
-                <Card className="bg-gradient-to-br from-slate-800 to-slate-900 border-emerald-600/50 border-2 p-8 space-y-6">
-                  {/* Status Heading */}
-                  <h2 className="text-white text-2xl">In Transit to Pickup</h2>
-                  
-                  {/* Location Info */}
-                  <div className="flex items-start gap-4">
-                    <MapPin className="w-6 h-6 text-emerald-500 mt-1 flex-shrink-0" />
-                    <div className="flex-1">
-                      <div className="text-white text-xl mb-2">Pizza Hut, Indiranagar</div>
-                      <div className="text-slate-400 mb-3">100 Feet Road, Bangalore</div>
-                      <div className="flex items-center gap-4">
-                        <span className="text-emerald-400 text-lg">2.4 km away</span>
-                        <span className="text-slate-600">•</span>
-                        <div className="flex items-center gap-2 text-slate-400">
-                          <Clock className="w-5 h-5" />
-                          <span>8 mins</span>
-                        </div>
-                      </div>
+                <div className="flex items-center gap-4 mb-6 text-sm">
+                    <div className="flex items-center gap-1 text-emerald-400">
+                        <Navigation className="w-4 h-4" />
+                        <span>{route ? `${(route.distance / 1000).toFixed(1)} km` : '...'}</span>
                     </div>
-                  </div>
-
-                  {/* Order Details */}
-                  <div className="space-y-4 pt-6 border-t border-slate-700">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Order ID</span>
-                      <span className="text-white text-lg">#ORD-2846</span>
+                    <div className="flex items-center gap-1 text-slate-400">
+                        <Clock className="w-4 h-4" />
+                        <span>{route ? `${(route.time / 60000).toFixed(0)} mins` : '...'}</span>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Items</span>
-                      <span className="text-white">2 Pizzas, 1 Coke</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Earnings</span>
-                      <span className="text-emerald-400 text-lg">₹65</span>
-                    </div>
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div className="grid grid-cols-2 gap-4 pt-4">
-                    <Button 
-                      variant="outline" 
-                      className="bg-slate-900/50 border-slate-700 text-white hover:bg-slate-800 h-14"
-                    >
-                      <Phone className="w-5 h-5 mr-2" />
-                      Call Customer
-                    </Button>
-                    <Button className="bg-emerald-500 hover:bg-emerald-600 text-white h-14">
-                      <Navigation className="w-5 h-5 mr-2" />
-                      Navigate
-                    </Button>
-                  </div>
-                </Card>
+                </div>
 
                 {/* Swipe to Confirm */}
-                <div className="space-y-3">
+                <div 
+                  className="relative bg-emerald-600/30 border-2 border-emerald-600 rounded-xl h-14 overflow-hidden cursor-pointer select-none"
+                  onMouseDown={handleSwipeStart}
+                  onMouseMove={handleSwipeMove}
+                  onMouseUp={handleSwipeEnd}
+                  onMouseLeave={handleSwipeEnd}
+                  onTouchStart={handleSwipeStart}
+                  onTouchMove={handleSwipeMove}
+                  onTouchEnd={handleSwipeEnd}
+                >
                   <div 
-                    className="relative bg-emerald-600/30 border-2 border-emerald-600 rounded-2xl h-20 overflow-hidden cursor-pointer select-none"
-                    onMouseDown={handleSwipeStart}
-                    onMouseMove={handleSwipeMove}
-                    onMouseUp={handleSwipeEnd}
-                    onMouseLeave={handleSwipeEnd}
-                    onTouchStart={handleSwipeStart}
-                    onTouchMove={handleSwipeMove}
-                    onTouchEnd={handleSwipeEnd}
+                    className="absolute inset-0 bg-emerald-600 transition-all duration-100"
+                    style={{ width: `${swipeProgress * 100}%` }}
+                  />
+                  <div 
+                    className="absolute left-1 top-1 bottom-1 w-12 bg-white rounded-lg shadow-lg flex items-center justify-center transition-all duration-100"
+                    style={{ 
+                      left: isDragging ? `calc(${swipeProgress * 100}% - ${swipeProgress * 48}px)` : '4px'
+                    }}
                   >
-                    {/* Background progress */}
-                    <div 
-                      className="absolute inset-0 bg-emerald-600 transition-all duration-100"
-                      style={{ width: `${swipeProgress * 100}%` }}
-                    />
-                    
-                    {/* Slider button */}
-                    <div 
-                      className="absolute left-1 top-1 bottom-1 w-16 bg-white rounded-xl shadow-lg flex items-center justify-center transition-all duration-100"
-                      style={{ 
-                        left: isDragging ? `calc(${swipeProgress * 100}% - ${swipeProgress * 64}px)` : '4px',
-                        transform: isDragging ? 'scale(1.05)' : 'scale(1)'
-                      }}
-                    >
-                      <ChevronRight className="w-7 h-7 text-emerald-600" />
-                    </div>
-                    
-                    {/* Text */}
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-white text-lg">
-                        Swipe to Confirm Pickup
-                      </span>
-                    </div>
+                    <ChevronRight className="w-6 h-6 text-emerald-600" />
                   </div>
-                  <p className="text-center text-slate-500">
-                    Swipe right when you've collected the order
-                  </p>
-                </div>
-              </div>
-
-              {/* Right Column - Upcoming & Stats */}
-              <div className="space-y-6">
-                {/* Upcoming Deliveries */}
-                <div>
-                  <h3 className="text-slate-400 text-sm uppercase tracking-wider mb-4">Upcoming Deliveries</h3>
-                  <div className="space-y-4">
-                    {upcomingDeliveries.map((delivery) => (
-                      <Card key={delivery.id} className="bg-slate-800 border-slate-700 p-6 hover:border-slate-600 transition-colors">
-                        <div className="flex items-start gap-4">
-                          <div className="w-12 h-12 bg-blue-500/20 rounded-full flex items-center justify-center flex-shrink-0">
-                            <MapPin className="w-6 h-6 text-blue-400" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-white text-lg mb-1">{delivery.location}</div>
-                            <div className="text-slate-400 mb-3">{delivery.address}</div>
-                            <div className="text-blue-400">{delivery.distance} from pickup</div>
-                          </div>
-                          <Badge className="bg-slate-700 text-slate-300 border-slate-600 flex-shrink-0">
-                            {delivery.type}
-                          </Badge>
-                        </div>
-                      </Card>
-                    ))}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <span className="text-white font-semibold drop-shadow-md text-sm">
+                      {activeOrder.status === 'assigned' ? 'Swipe to Pick Up' : 'Swipe to Complete'}
+                    </span>
                   </div>
                 </div>
-              </div>
-            </div>
-          </div>
+             </Card>
+           ) : (
+             <Card className="bg-slate-900/95 border-slate-700 p-6 text-center shadow-xl backdrop-blur-md">
+               <h3 className="text-white text-lg mb-2">No Active Orders</h3>
+               <p className="text-slate-400 text-sm">Wait for new assignments...</p>
+             </Card>
+           )}
         </div>
       </div>
     </div>
