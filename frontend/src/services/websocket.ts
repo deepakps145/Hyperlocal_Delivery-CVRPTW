@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 type WebSocketMessage = {
-  type: 'order_update' | 'rider_update' | 'order_cancelled' | 'order_assigned';
+  type: 'order_update' | 'rider_update' | 'order_cancelled' | 'order_assigned' | 'order_deleted' | 'route_updated';
   data: any;
 };
 
@@ -16,22 +16,29 @@ export function useWebSocket(url: string): WebSocketHookReturn {
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
 
   const connect = () => {
     try {
       const token = localStorage.getItem('token');
-      if (!token) return;
+      if (!token) {
+        console.log('WebSocket: No token available, skipping connection');
+        return;
+      }
 
       // Close existing connection if any
       if (ws.current) {
         ws.current.close();
       }
 
+      console.log('WebSocket: Attempting connection to', url);
       ws.current = new WebSocket(`${url}?token=${token}`);
 
       ws.current.onopen = () => {
         console.log('WebSocket connected');
-        setIsConnected(true);
+        if (mountedRef.current) {
+          setIsConnected(true);
+        }
         // Clear reconnect timeout if connection successful
         if (reconnectTimeout.current) {
           clearTimeout(reconnectTimeout.current);
@@ -42,7 +49,9 @@ export function useWebSocket(url: string): WebSocketHookReturn {
       ws.current.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          setLastMessage(message);
+          if (mountedRef.current) {
+            setLastMessage(message);
+          }
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
         }
@@ -50,16 +59,21 @@ export function useWebSocket(url: string): WebSocketHookReturn {
 
       ws.current.onclose = () => {
         console.log('WebSocket disconnected');
-        setIsConnected(false);
-        // Attempt to reconnect after 3 seconds
-        reconnectTimeout.current = setTimeout(() => {
-          console.log('Attempting to reconnect...');
-          connect();
-        }, 3000);
+        if (mountedRef.current) {
+          setIsConnected(false);
+          // Attempt to reconnect after 3 seconds only if still mounted
+          reconnectTimeout.current = setTimeout(() => {
+            if (mountedRef.current) {
+              console.log('Attempting to reconnect...');
+              connect();
+            }
+          }, 3000);
+        }
       };
 
       ws.current.onerror = (error) => {
         console.error('WebSocket error:', error);
+        // Don't let websocket errors crash the app
       };
     } catch (error) {
       console.error('Error connecting to WebSocket:', error);
@@ -67,10 +81,19 @@ export function useWebSocket(url: string): WebSocketHookReturn {
   };
 
   useEffect(() => {
-    connect();
+    mountedRef.current = true;
+    
+    // Delay connection slightly to ensure component is fully mounted
+    const initTimeout = setTimeout(() => {
+      if (mountedRef.current) {
+        connect();
+      }
+    }, 100);
 
     return () => {
       // Cleanup on unmount
+      mountedRef.current = false;
+      clearTimeout(initTimeout);
       if (reconnectTimeout.current) {
         clearTimeout(reconnectTimeout.current);
       }

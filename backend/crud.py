@@ -37,9 +37,13 @@ def create_order(db: Session, order: schemas.OrderCreate):
 def update_order_status(db: Session, order_id: int, status: str):
     db_order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if db_order:
-        db_order.status = status
+        if status == models.OrderStatus.DELIVERED:
+            db.delete(db_order)
+        else:
+            db_order.status = status
         db.commit()
-        db.refresh(db_order)
+        if status != models.OrderStatus.DELIVERED:
+            db.refresh(db_order)
     return db_order
 
 def assign_order_to_rider(db: Session, order_id: int, rider_id: int):
@@ -50,6 +54,9 @@ def assign_order_to_rider(db: Session, order_id: int, rider_id: int):
         db.commit()
         db.refresh(db_order)
     return db_order
+
+def get_available_orders(db: Session):
+    return db.query(models.Order).filter(models.Order.status == models.OrderStatus.PENDING, models.Order.rider_id == None).all()
 
 def get_rider_orders(db: Session, rider_id: int):
     return db.query(models.Order).filter(models.Order.rider_id == rider_id).all()

@@ -81,28 +81,222 @@ def read_users(role: str = None, db: Session = Depends(get_db), current_user: mo
     return db.query(models.User).all()
 
 @app.post("/orders/", response_model=schemas.Order)
-def create_order(order: schemas.OrderCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.create_order(db=db, order=order)
+async def create_order(order: schemas.OrderCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    new_order = crud.create_order(db=db, order=order)
+    
+    # FORCE ASSIGNMENT TO THE FIRST RIDER FOUND (Single Rider Mode)
+    try:
+        # Get ANY rider (assuming single rider scenario) - Case insensitive check
+        rider = db.query(models.User).filter(models.User.role.ilike('rider')).first()
+        
+        if rider:
+            print(f"Auto-assigning order {new_order.id} to rider {rider.id} ({rider.name})")
+            # Assign order immediately
+            crud.assign_order_to_rider(db, new_order.id, rider.id)
+            
+            # Update rider status if needed
+            if rider.status == models.RiderStatus.AVAILABLE:
+                rider.status = models.RiderStatus.BUSY
+                db.commit()
+            
+            # Trigger route optimization
+            orders = crud.get_rider_orders(db, rider.id)
+            
+            points = []
+            if rider.current_lat and rider.current_lng:
+                points.append((rider.current_lat, rider.current_lng))
+            
+            orders_data = []
+            for o in orders:
+                points.append((o.lat, o.lng))
+                orders_data.append({
+                    'lat': o.lat,
+                    'lng': o.lng,
+                    'priority': o.priority if hasattr(o, 'priority') else 1,
+                    'weight': o.weight if hasattr(o, 'weight') else 1.0,
+                    'delivery_time_start': o.delivery_time_start if hasattr(o, 'delivery_time_start') else None,
+                    'delivery_time_end': o.delivery_time_end if hasattr(o, 'delivery_time_end') else None,
+                })
+            
+            if len(points) >= 2:
+                rider_capacity = rider.capacity if hasattr(rider, 'capacity') else 10.0
+                from fastapi.concurrency import run_in_threadpool
+                route_data = await run_in_threadpool(routing.get_optimized_route, points, orders_data, rider_capacity)
+                
+                # Broadcast route update
+                await manager.broadcast({
+                    "type": "route_updated",
+                    "data": {
+                        "rider_id": rider.id,
+                        "route": route_data
+                    }
+                })
+            
+            # Broadcast order assignment
+            await manager.broadcast({
+                "type": "order_assigned",
+                "data": {
+                    "order_id": new_order.id,
+                    "rider_id": rider.id
+                }
+            })
+            
+            # Refresh order to return updated status
+            db.refresh(new_order)
+        else:
+            print("No rider found for auto-assignment")
+                
+    except Exception as e:
+        print(f"Error in auto-assignment during creation: {e}")
+        
+    return new_order
 
 @app.get("/orders/", response_model=List[schemas.Order])
 def read_orders(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     return crud.get_orders(db, skip=skip, limit=limit)
+
+@app.get("/orders/available", response_model=List[schemas.Order])
+def read_available_orders(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    return crud.get_available_orders(db)
+
+@app.post("/orders/{order_id}/pick", response_model=schemas.Order)
+async def pick_order(order_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if current_user.role != 'rider':
+        raise HTTPException(status_code=403, detail="Only riders can pick orders")
+    
+    # Update status to IN_TRANSIT
+    order = crud.update_order_status(db, order_id, models.OrderStatus.IN_TRANSIT)
+    
+    # Trigger route optimization for the rider
+    try:
+        rider = current_user
+        orders = crud.get_rider_orders(db, rider.id)
+        
+        points = []
+        if rider.current_lat and rider.current_lng:
+            points.append((rider.current_lat, rider.current_lng))
+        
+        orders_data = []
+        for o in orders:
+            # Only include IN_TRANSIT orders in route optimization
+            if o.status == models.OrderStatus.IN_TRANSIT:
+                points.append((o.lat, o.lng))
+                orders_data.append({
+                    'lat': o.lat,
+                    'lng': o.lng,
+                    'priority': o.priority if hasattr(o, 'priority') else 1,
+                    'weight': o.weight if hasattr(o, 'weight') else 1.0,
+                    'delivery_time_start': o.delivery_time_start if hasattr(o, 'delivery_time_start') else None,
+                    'delivery_time_end': o.delivery_time_end if hasattr(o, 'delivery_time_end') else None,
+                })
+        
+        if len(points) >= 2:
+            rider_capacity = rider.capacity if hasattr(rider, 'capacity') else 10.0
+            from fastapi.concurrency import run_in_threadpool
+            route_data = await run_in_threadpool(routing.get_optimized_route, points, orders_data, rider_capacity)
+            
+            # Broadcast route update
+            await manager.broadcast({
+                "type": "route_updated",
+                "data": {
+                    "rider_id": rider.id,
+                    "route": route_data
+                }
+            })
+            
+        # Broadcast order assignment/update
+        await manager.broadcast({
+            "type": "order_assigned",
+            "data": {
+                "order_id": order.id,
+                "rider_id": rider.id,
+                "status": order.status
+            }
+        })
+            
+    except Exception as e:
+        print(f"Error optimizing route: {e}")
+        
+    return order
 
 @app.put("/orders/{order_id}/status", response_model=schemas.Order)
 def update_order_status(order_id: int, status: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     return crud.update_order_status(db, order_id, status)
 
 @app.post("/orders/{order_id}/assign/{rider_id}", response_model=schemas.Order)
-def assign_order(order_id: int, rider_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.assign_order_to_rider(db, order_id, rider_id)
+async def assign_order(order_id: int, rider_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    order = crud.assign_order_to_rider(db, order_id, rider_id)
+    
+    # Trigger route optimization for the rider
+    try:
+        rider = db.query(models.User).filter(models.User.id == rider_id).first()
+        orders = crud.get_rider_orders(db, rider_id)
+        
+        points = []
+        if rider.current_lat and rider.current_lng:
+            points.append((rider.current_lat, rider.current_lng))
+        
+        orders_data = []
+        for o in orders:
+            points.append((o.lat, o.lng))
+            orders_data.append({
+                'lat': o.lat,
+                'lng': o.lng,
+                'priority': o.priority if hasattr(o, 'priority') else 1,
+                'weight': o.weight if hasattr(o, 'weight') else 1.0,
+                'delivery_time_start': o.delivery_time_start if hasattr(o, 'delivery_time_start') else None,
+                'delivery_time_end': o.delivery_time_end if hasattr(o, 'delivery_time_end') else None,
+            })
+        
+        if len(points) >= 2:
+            rider_capacity = rider.capacity if hasattr(rider, 'capacity') else 10.0
+            # Run routing in threadpool to avoid blocking event loop
+            from fastapi.concurrency import run_in_threadpool
+            route_data = await run_in_threadpool(routing.get_optimized_route, points, orders_data, rider_capacity)
+            
+            # Broadcast route update
+            await manager.broadcast({
+                "type": "route_updated",
+                "data": {
+                    "rider_id": rider_id,
+                    "route": route_data
+                }
+            })
+            
+        # Broadcast order assignment
+        await manager.broadcast({
+            "type": "order_assigned",
+            "data": {
+                "order_id": order.id,
+                "rider_id": rider.id
+            }
+        })
+            
+    except Exception as e:
+        print(f"Error optimizing route: {e}")
+        
+    return order
 
 @app.get("/riders/{rider_id}/orders", response_model=List[schemas.Order])
 def read_rider_orders(rider_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     return crud.get_rider_orders(db, rider_id)
 
 @app.put("/riders/{rider_id}/location", response_model=schemas.User)
-def update_location(rider_id: int, location: schemas.LocationUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.update_rider_location(db, rider_id, location.lat, location.lng)
+async def update_location(rider_id: int, location: schemas.LocationUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    updated_rider = crud.update_rider_location(db, rider_id, location.lat, location.lng)
+    
+    # Broadcast location update
+    await manager.broadcast({
+        "type": "rider_update",
+        "data": {
+            "rider_id": rider_id,
+            "lat": location.lat,
+            "lng": location.lng,
+            "name": updated_rider.name
+        }
+    })
+    
+    return updated_rider
 
 # In-memory storage for traffic points (for demo purposes)
 TRAFFIC_POINTS = []
@@ -129,18 +323,21 @@ def optimize_route(rider_id: int, avoid_traffic: bool = False, db: Session = Dep
     # Prepare order data with constraints
     orders_data = []
     for order in orders:
-        points.append((order.lat, order.lng))
-        orders_data.append({
-            'lat': order.lat,
-            'lng': order.lng,
-            'priority': order.priority if hasattr(order, 'priority') else 1,
-            'weight': order.weight if hasattr(order, 'weight') else 1.0,
-            'delivery_time_start': order.delivery_time_start if hasattr(order, 'delivery_time_start') else None,
-            'delivery_time_end': order.delivery_time_end if hasattr(order, 'delivery_time_end') else None,
-        })
+        # Only include IN_TRANSIT orders in route optimization
+        if order.status == models.OrderStatus.IN_TRANSIT:
+            points.append((order.lat, order.lng))
+            orders_data.append({
+                'lat': order.lat,
+                'lng': order.lng,
+                'priority': order.priority if hasattr(order, 'priority') else 1,
+                'weight': order.weight if hasattr(order, 'weight') else 1.0,
+                'delivery_time_start': order.delivery_time_start if hasattr(order, 'delivery_time_start') else None,
+                'delivery_time_end': order.delivery_time_end if hasattr(order, 'delivery_time_end') else None,
+            })
         
     if len(points) < 2:
-        return {"message": "Not enough points for routing"}
+        # If no orders are picked up, return empty route or just rider location
+        return {"points": points, "paths": [], "distance": 0, "time": 0}
 
     # Get rider capacity
     rider_capacity = rider.capacity if hasattr(rider, 'capacity') else 10.0
@@ -155,12 +352,9 @@ def optimize_route(rider_id: int, avoid_traffic: bool = False, db: Session = Dep
         raise HTTPException(status_code=500, detail="Routing failed")
 
 @app.post("/orders/auto-assign")
-def auto_assign_orders(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+async def auto_assign_orders(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """
-    Intelligent order grouping and assignment based on:
-    - Proximity clustering
-    - Rider availability and location
-    - Rider capacity constraints
+    Force assign ALL pending orders to available riders irrespective of capacity.
     """
     # Get all pending orders
     pending_orders = db.query(models.Order).filter(models.Order.status == models.OrderStatus.PENDING).all()
@@ -168,79 +362,101 @@ def auto_assign_orders(db: Session = Depends(get_db), current_user: models.User 
     if not pending_orders:
         return {"message": "No pending orders", "assigned": 0}
     
-    # Get available riders
-    available_riders = db.query(models.User).filter(
-        models.User.role == 'rider',
-        models.User.status == models.RiderStatus.AVAILABLE
-    ).all()
-    
-    if not available_riders:
-        return {"message": "No available riders", "assigned": 0}
-    
-    # Convert orders to dict format for clustering
-    orders_list = [
-        {
-            'id': o.id,
-            'lat': o.lat,
-            'lng': o.lng,
-            'weight': o.weight if hasattr(o, 'weight') else 1.0,
-            'priority': o.priority if hasattr(o, 'priority') else 1,
-        }
-        for o in pending_orders
-    ]
-    
-    # Cluster orders by proximity
-    clusters = routing.cluster_orders_by_proximity(orders_list, max_distance_km=5.0)
+    # Get ALL riders (case insensitive)
+    riders = db.query(models.User).filter(models.User.role.ilike('rider')).all()
+
+    if not riders:
+        return {"message": "No riders found", "assigned": 0}
     
     assigned_count = 0
+    affected_riders = set()
     
-    # Assign each cluster to nearest available rider
-    for cluster in clusters:
-        if not available_riders:
-            break
+    # Assign each order
+    for order in pending_orders:
+        # If only one rider, assign to them directly
+        if len(riders) == 1:
+            nearest_rider = riders[0]
+        else:
+            # Find nearest rider (ignoring capacity)
+            nearest_rider = min(
+                riders,
+                key=lambda r: routing.calculate_distance(
+                    (r.current_lat, r.current_lng),
+                    (order.lat, order.lng)
+                ) if r.current_lat and r.current_lng else float('inf')
+            )
+        
+        # Assign order
+        order.rider_id = nearest_rider.id
+        order.status = models.OrderStatus.ASSIGNED
+        assigned_count += 1
+        
+        # Mark rider as busy if not already
+        if nearest_rider.status == models.RiderStatus.AVAILABLE:
+            nearest_rider.status = models.RiderStatus.BUSY
             
-        # Calculate cluster center
-        cluster_lat = sum(o['lat'] for o in cluster) / len(cluster)
-        cluster_lng = sum(o['lng'] for o in cluster) / len(cluster)
-        
-        # Find nearest rider with capacity
-        cluster_weight = sum(o['weight'] for o in cluster)
-        suitable_riders = [
-            r for r in available_riders 
-            if (hasattr(r, 'capacity') and r.capacity >= cluster_weight) or not hasattr(r, 'capacity')
-        ]
-        
-        if not suitable_riders:
-            continue
-        
-        nearest_rider = min(
-            suitable_riders,
-            key=lambda r: routing.calculate_distance(
-                (r.current_lat or cluster_lat, r.current_lng or cluster_lng),
-                (cluster_lat, cluster_lng)
-            ) if r.current_lat and r.current_lng else float('inf')
-        )
-        
-        # Assign all orders in cluster to this rider
-        for order_data in cluster:
-            order = db.query(models.Order).filter(models.Order.id == order_data['id']).first()
-            if order:
-                order.rider_id = nearest_rider.id
-                order.status = models.OrderStatus.ASSIGNED
-                assigned_count += 1
-        
-        # Mark rider as busy
-        nearest_rider.status = models.RiderStatus.BUSY
-        available_riders.remove(nearest_rider)
+        affected_riders.add(nearest_rider.id)
     
     db.commit()
+
+    # Trigger route optimization for affected riders
+    for rider_id in affected_riders:
+        try:
+            rider = db.query(models.User).filter(models.User.id == rider_id).first()
+            orders = crud.get_rider_orders(db, rider_id)
+            
+            points = []
+            if rider.current_lat and rider.current_lng:
+                points.append((rider.current_lat, rider.current_lng))
+            
+            orders_data = []
+            for order in orders:
+                points.append((order.lat, order.lng))
+                orders_data.append({
+                    'lat': order.lat,
+                    'lng': order.lng,
+                    'priority': order.priority if hasattr(order, 'priority') else 1,
+                    'weight': order.weight if hasattr(order, 'weight') else 1.0,
+                    'delivery_time_start': order.delivery_time_start if hasattr(order, 'delivery_time_start') else None,
+                    'delivery_time_end': order.delivery_time_end if hasattr(order, 'delivery_time_end') else None,
+                })
+            
+            if len(points) >= 2:
+                rider_capacity = rider.capacity if hasattr(rider, 'capacity') else 10.0
+                from fastapi.concurrency import run_in_threadpool
+                route_data = await run_in_threadpool(routing.get_optimized_route, points, orders_data, rider_capacity)
+                
+                # Broadcast route update
+                await manager.broadcast({
+                    "type": "route_updated",
+                    "data": {
+                        "rider_id": rider_id,
+                        "route": route_data
+                    }
+                })
+        except Exception as e:
+            print(f"Error optimizing route for rider {rider_id}: {e}")
+    
+    # Broadcast general update
+    await manager.broadcast({
+        "type": "orders_assigned",
+        "count": assigned_count
+    })
     
     return {
         "message": "Orders assigned successfully",
         "assigned": assigned_count,
-        "clusters": len(clusters),
-        "riders_used": len([r for r in db.query(models.User).filter(models.User.role == 'rider', models.User.status == models.RiderStatus.BUSY).all()])
+        "riders_used": len(affected_riders)
     }
+
+@app.post("/riders/{rider_id}/pick-all")
+def pick_all_orders(rider_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    # Get all assigned orders for rider
+    orders = db.query(models.Order).filter(models.Order.rider_id == rider_id, models.Order.status == models.OrderStatus.ASSIGNED).all()
+    for order in orders:
+        order.status = models.OrderStatus.IN_TRANSIT # or PICKED_UP
+    db.commit()
+    return {"message": f"Picked up {len(orders)} orders"}
 
 # WebSocket Connection Manager
 class ConnectionManager:
@@ -360,3 +576,80 @@ async def get_order(order_id: int, db: Session = Depends(get_db), current_user: 
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+@app.delete("/orders/{order_id}")
+async def delete_order(order_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """
+    Permanently delete an order from the database
+    """
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    affected_rider_id = order.rider_id
+    
+    # Delete the order
+    db.delete(order)
+    db.commit()
+    
+    # Broadcast order deletion
+    await manager.broadcast({
+        "type": "order_deleted",
+        "data": {
+            "order_id": order_id,
+            "rider_id": affected_rider_id
+        }
+    })
+    
+    return {
+        "message": "Order deleted successfully",
+        "order_id": order_id
+    }
+
+@app.get("/orders/stats")
+async def get_order_stats(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """
+    Get order statistics
+    """
+    total = db.query(models.Order).count()
+    pending = db.query(models.Order).filter(models.Order.status == models.OrderStatus.PENDING).count()
+    assigned = db.query(models.Order).filter(models.Order.status == models.OrderStatus.ASSIGNED).count()
+    in_transit = db.query(models.Order).filter(models.Order.status == models.OrderStatus.IN_TRANSIT).count()
+    delivered = db.query(models.Order).filter(models.Order.status == models.OrderStatus.DELIVERED).count()
+    cancelled = db.query(models.Order).filter(models.Order.status == models.OrderStatus.CANCELLED).count()
+    
+    return {
+        "total": total,
+        "pending": pending,
+        "assigned": assigned,
+        "in_transit": in_transit,
+        "delivered": delivered,
+        "cancelled": cancelled
+    }
+
+@app.get("/riders/{rider_id}/stats")
+async def get_rider_stats(rider_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """
+    Get rider statistics
+    """
+    rider = db.query(models.User).filter(models.User.id == rider_id).first()
+    if not rider:
+        raise HTTPException(status_code=404, detail="Rider not found")
+    
+    total_orders = db.query(models.Order).filter(models.Order.rider_id == rider_id).count()
+    active_orders = db.query(models.Order).filter(
+        models.Order.rider_id == rider_id,
+        models.Order.status.in_([models.OrderStatus.ASSIGNED, models.OrderStatus.IN_TRANSIT])
+    ).count()
+    
+    return {
+        "rider_id": rider_id,
+        "name": rider.name,
+        "status": rider.status,
+        "total_orders": total_orders,
+        "active_orders": active_orders,
+        "current_location": {
+            "lat": rider.current_lat,
+            "lng": rider.current_lng
+        }
+    }

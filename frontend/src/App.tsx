@@ -10,17 +10,24 @@ import { RiderSignup } from './pages/RiderSignup';
 
 // Protected Route Component
 function ProtectedRoute({ children, requiredRole }: { children: React.ReactNode; requiredRole?: string }) {
-  const user = JSON.parse(localStorage.getItem('user') || 'null');
+  const userStr = localStorage.getItem('user');
   const token = localStorage.getItem('token');
+  
+  console.log('ProtectedRoute: checking auth', { hasUser: !!userStr, hasToken: !!token, requiredRole });
+  
+  const user = userStr ? JSON.parse(userStr) : null;
 
   if (!user || !token) {
+    console.log('ProtectedRoute: No user or token, redirecting to /');
     return <Navigate to="/" replace />;
   }
 
   if (requiredRole && user.role !== requiredRole) {
+    console.log('ProtectedRoute: Role mismatch', { userRole: user.role, requiredRole });
     return <Navigate to="/" replace />;
   }
 
+  console.log('ProtectedRoute: Auth passed, rendering children');
   return <>{children}</>;
 }
 
@@ -48,7 +55,11 @@ function AdminLoginWrapper() {
     navigate('/admin-signup');
   };
 
-  return <AdminLogin onLoginSuccess={handleLoginSuccess} onNavigateToSignup={handleNavigateToSignup} />;
+  const handleBack = () => {
+    navigate('/');
+  };
+
+  return <AdminLogin onLoginSuccess={handleLoginSuccess} onNavigateToSignup={handleNavigateToSignup} onBack={handleBack} />;
 }
 
 function AdminSignupWrapper() {
@@ -80,7 +91,11 @@ function RiderLoginWrapper() {
     navigate('/rider-signup');
   };
 
-  return <RiderLogin onLoginSuccess={handleLoginSuccess} onNavigateToSignup={handleNavigateToSignup} />;
+  const handleBack = () => {
+    navigate('/');
+  };
+
+  return <RiderLogin onLoginSuccess={handleLoginSuccess} onNavigateToSignup={handleNavigateToSignup} onBack={handleBack} />;
 }
 
 function RiderSignupWrapper() {
@@ -126,7 +141,7 @@ function RiderDashboardWrapper() {
 export default function App() {
   return (
     <Router>
-      <div className="size-full">
+      <div className="h-full w-full min-h-screen bg-slate-950">
         <Routes>
           <Route path="/" element={<LandingPageWrapper />} />
           <Route path="/admin-login" element={<AdminLoginWrapper />} />

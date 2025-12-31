@@ -26,10 +26,12 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid
+      // Token expired or invalid - clear storage but don't redirect here
+      // Let the component handle the redirect to avoid race conditions
+      console.log('API: 401 error - clearing auth data');
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/';
+      // Don't redirect here - let ProtectedRoute handle it on next render
     }
     return Promise.reject(error);
   }
@@ -47,6 +49,21 @@ export const signup = async (userData: any) => {
 
 export const getOrders = async () => {
   const response = await api.get('/orders/');
+  return response.data;
+};
+
+export const getAvailableOrders = async () => {
+  const response = await api.get('/orders/available');
+  return response.data;
+};
+
+export const pickOrder = async (orderId: number) => {
+  const response = await api.post(`/orders/${orderId}/pick`);
+  return response.data;
+};
+
+export const pickAllOrders = async (riderId: number) => {
+  const response = await api.post(`/riders/${riderId}/pick-all`);
   return response.data;
 };
 
@@ -95,6 +112,11 @@ export const cancelOrder = async (orderId: number) => {
   return response.data;
 };
 
+export const deleteOrder = async (orderId: number) => {
+  const response = await api.delete(`/orders/${orderId}`);
+  return response.data;
+};
+
 export const getOrder = async (orderId: number) => {
   const response = await api.get(`/orders/${orderId}`);
   return response.data;
@@ -102,5 +124,15 @@ export const getOrder = async (orderId: number) => {
 
 export const updateOrderStatus = async (orderId: number, status: string) => {
   const response = await api.put(`/orders/${orderId}/status?status=${status}`);
+  return response.data;
+};
+
+export const getRiderStats = async (riderId: number) => {
+  const response = await api.get(`/riders/${riderId}/stats`);
+  return response.data;
+};
+
+export const getOrderStats = async () => {
+  const response = await api.get('/orders/stats');
   return response.data;
 };
