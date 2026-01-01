@@ -197,19 +197,6 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
     }
   };
 
-  const handleDeleteOrder = async (orderId: number, e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    if (!confirm('Are you sure you want to permanently delete this order? This action cannot be undone.')) return;
-
-    try {
-      await deleteOrder(orderId);
-      await fetchOrders();
-    } catch (error: any) {
-      console.error("Error deleting order:", error);
-      alert(`Failed to delete order: ${error.response?.data?.detail || error.message}`);
-    }
-  };
-
   const handleViewRiderRoute = async (riderId: number) => {
     if (selectedRider === riderId) {
       setSelectedRider(null);
@@ -331,7 +318,8 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
       </Button>
 
       {/* Left Sidebar */}
-      <div className={`fixed lg:static inset-y-0 left-0 z-40 w-80 bg-slate-900/95 backdrop-blur-md border-r border-slate-800 flex flex-col transition-transform duration-300 ${
+      {/* Left Sidebar */}
+      <div className={`fixed lg:static inset-y-0 left-0 z-40 w-72 lg:w-80 bg-slate-900/95 backdrop-blur-md border-r border-slate-800 flex flex-col transition-transform duration-300 ${
         sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
       }`}>
         {/* Header */}
@@ -340,23 +328,23 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
             <Button variant="ghost" size="icon" onClick={onBack} className="text-slate-400 hover:text-white shrink-0">
               <ArrowLeft className="w-5 h-5" />
             </Button>
-            <div className="flex items-center gap-2 flex-1">
-              <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-blue-500 rounded-lg flex items-center justify-center shadow-lg">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-blue-500 rounded-lg flex items-center justify-center shadow-lg shrink-0">
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
-              <span className="text-lg font-bold gradient-text">GraphHopper</span>
+              <span className="text-lg font-bold gradient-text truncate">GraphHopper</span>
             </div>
             {isConnected && (
-              <div className="flex items-center gap-1 px-2 py-1 bg-emerald-500/20 rounded-full">
+              <div className="flex items-center gap-1 px-2 py-1 bg-emerald-500/20 rounded-full shrink-0">
                 <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                <span className="text-xs text-emerald-400">Live</span>
+                <span className="text-xs text-emerald-400 hidden sm:inline">Live</span>
               </div>
             )}
           </div>
         </div>
 
-        {/* Content Scroll Area */}
-        <ScrollArea className="flex-1 custom-scrollbar">
+        {/* Content Scroll Area - REPLACED ScrollArea with div for better responsiveness */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
           <div className="p-4 space-y-4">
             
             {/* Quick Actions */}
@@ -427,6 +415,7 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
                         <div className="text-xs text-slate-500 truncate mb-2">{order.delivery_address}</div>
                         
                         {/* Order Actions */}
+                        {/* Order Actions */}
                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           {order.status !== 'cancelled' && order.status !== 'delivered' && (
                             <Button
@@ -439,15 +428,7 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
                               Cancel
                             </Button>
                           )}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                            onClick={(e) => handleDeleteOrder(order.id, e)}
-                          >
-                            <Trash2 className="w-3 h-3 mr-1" />
-                            Delete
-                          </Button>
+                          {/* Delete Button Removed Here */}
                         </div>
                       </div>
                     ))
@@ -519,7 +500,7 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
               </div>
             </div>
           </div>
-        </ScrollArea>
+        </div>
       </div>
 
       {/* Overlay for mobile */}
@@ -620,13 +601,6 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
         {/* Map Container */}
         <div className="flex-1 relative overflow-hidden">
           <div className="absolute inset-0 bg-slate-900">
-            {/* Temporarily disable map to test */}
-            {/* <div className="h-full w-full flex items-center justify-center text-white">
-              <div className="text-center">
-                <div className="text-2xl mb-2">🗺️ Map View</div>
-                <div className="text-slate-400">Orders: {filteredOrders.length} | Riders: {filteredRiders.length}</div>
-              </div>
-            </div> */}
             <MapComponent 
               orders={filteredOrders} 
               riders={filteredRiders} 
