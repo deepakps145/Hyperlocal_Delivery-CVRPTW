@@ -139,9 +139,11 @@ function RiderDashboardWrapper() {
 }
 
 export default function App() {
+  console.log('App: Rendering');
+  
   return (
     <Router>
-      <div className="h-full w-full min-h-screen bg-slate-950">
+      <div className="h-screen w-screen bg-slate-950">
         <Routes>
           <Route path="/" element={<LandingPageWrapper />} />
           <Route path="/admin-login" element={<AdminLoginWrapper />} />

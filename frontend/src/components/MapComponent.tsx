@@ -3,12 +3,9 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { useEffect, useMemo } from 'react';
 
-// Fix for default marker icons in React-Leaflet
-import iconUrl from 'leaflet/dist/images/marker-icon.png';
-import iconShadowUrl from 'leaflet/dist/images/marker-shadow.png';
-
 // Create custom rider icon using SVG
-const createRiderIcon = () => {
+// REPLACE your existing createRiderIcon with this:
+const createRiderIcon = (color = '#10b981') => { // Default to emerald
   const svgIcon = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="48" height="48">
       <defs>
@@ -16,11 +13,10 @@ const createRiderIcon = () => {
           <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
         </filter>
       </defs>
-      <circle cx="32" cy="32" r="28" fill="#10b981" filter="url(#shadow)"/>
-      <circle cx="32" cy="32" r="24" fill="#059669"/>
+      <circle cx="32" cy="32" r="28" fill="${color}" filter="url(#shadow)"/>
+      <circle cx="32" cy="32" r="24" fill="${color === '#64748b' ? '#475569' : '#059669'}"/>
       <circle cx="32" cy="24" r="8" fill="white"/>
       <path d="M20 42 Q32 34 44 42 Q44 50 32 52 Q20 50 20 42" fill="white"/>
-      <circle cx="32" cy="32" r="4" fill="#059669"/>
     </svg>
   `;
   
@@ -100,8 +96,8 @@ export function MapComponent({
   // Fix marker icons once on mount
   useEffect(() => {
     const DefaultIcon = L.icon({
-      iconUrl,
-      shadowUrl: iconShadowUrl,
+      iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
       iconSize: [25, 41],
       iconAnchor: [12, 41],
       popupAnchor: [1, -34],
@@ -112,27 +108,35 @@ export function MapComponent({
   }, []);
 
   // Memoize route positions calculation to avoid re-calc on every render
+  // Memoize route positions calculation to avoid re-calc on every render
   const routePositions: [number, number][] = useMemo(() => {
     if (!route) return [];
     
+    // 1. Extract the actual points data from various possible structures
+    let pointsData = route.points;
+    
+    // Handle GraphHopper structure where points are inside 'paths' array
+    if (!pointsData && route.paths && Array.isArray(route.paths) && route.paths.length > 0) {
+      pointsData = route.paths[0].points;
+    }
+
+    if (!pointsData) return [];
+
     try {
       // Case 1: GeoJSON object (GraphHopper with points_encoded=false)
       // Structure: { type: "LineString", coordinates: [[lng, lat], ...] }
-      if (route.points && typeof route.points === 'object' && Array.isArray(route.points.coordinates)) {
-        return route.points.coordinates.map((c: number[]) => [c[1], c[0]]); // Convert [lng, lat] to [lat, lng]
+      if (typeof pointsData === 'object' && Array.isArray(pointsData.coordinates)) {
+        return pointsData.coordinates.map((c: number[]) => [c[1], c[0]]); // Convert [lng, lat] to [lat, lng]
       }
 
       // Case 2: Array of points directly
-      if (Array.isArray(route.points) && route.points.length > 0) {
-        const firstPoint = route.points[0];
-        if (Array.isArray(firstPoint)) {
-             return route.points as [number, number][];
-        }
+      if (Array.isArray(pointsData) && pointsData.length > 0) {
+         return pointsData as [number, number][];
       }
 
       // Case 3: Encoded Polyline string
-      if (typeof route.points === 'string') {
-        return decodePolyline(route.points);
+      if (typeof pointsData === 'string') {
+        return decodePolyline(pointsData);
       }
 
     } catch (e) {
@@ -245,12 +249,14 @@ export function MapComponent({
         ))}
 
         {/* Render Riders with custom icon */}
-        {normalizedRiders.map((rider, idx) => (
-          <Marker 
-            key={rider.id ?? `rider-${idx}`} 
-            position={rider._pos}
-            icon={rider.isCurrentRider ? createRiderIcon() : undefined}
-          >
+        {/* Find this block in your JSX */}
+{normalizedRiders.map((rider, idx) => (
+  <Marker 
+    key={rider.id ?? `rider-${idx}`} 
+    position={rider._pos}
+    // REPLACE the icon line with this:
+    icon={createRiderIcon(rider.isCurrentRider ? '#10b981' : '#64748b')} 
+  >
             <Popup>
               <div className="min-w-[120px]">
                 <p className="font-bold text-base mb-1">🏍️ {rider.name ?? `Rider ${rider.id}`}</p>

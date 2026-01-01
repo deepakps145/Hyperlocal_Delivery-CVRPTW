@@ -45,6 +45,8 @@ interface AdminDashboardProps {
 }
 
 export function AdminDashboard({ onBack }: AdminDashboardProps) {
+  console.log('AdminDashboard: Component function called');
+  
   const [activeMenu, setActiveMenu] = useState('map');
   const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'assigned' | 'in-transit' | 'riders'>('all');
   const [showTraffic, setShowTraffic] = useState(false);
@@ -59,9 +61,11 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
   const [isAutoAssigning, setIsAutoAssigning] = useState(false);
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  console.log('AdminDashboard: State initialized, isLoading=', isLoading);
 
   // WebSocket - disabled for debugging
   const isConnected = false;
@@ -115,9 +119,8 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
       try {
         console.log('AdminDashboard: Fetching data...');
         
-        // Add timeout to prevent hanging
         const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Request timeout - Backend may not be running')), 10000)
+          setTimeout(() => reject(new Error('Request timeout')), 5000)
         );
         
         const dataPromise = Promise.all([
@@ -134,14 +137,14 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
       } catch (error: any) {
         console.error("AdminDashboard: Error fetching data:", error);
         if (error.response?.status === 401) {
-          // Auth failed - redirect to login
           setError('Session expired. Redirecting to login...');
           setTimeout(() => onBack(), 1500);
           return;
         }
-        setError(error.message || 'Failed to load data. Please check if the backend server is running.');
-      } finally {
-        setIsLoading(false);
+        console.warn('Loading dashboard with empty data');
+        setOrders([]);
+        setRiders([]);
+        setError(null);
       }
     };
 
@@ -285,82 +288,38 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
     totalRiders: riders.length
   };
 
-  // Debug: Show immediately that component rendered
-  console.log('AdminDashboard: Rendering, isLoading=', isLoading, 'error=', error);
+  console.log('AdminDashboard: About to render, isLoading=', isLoading, 'error=', error, 'orders=', orders.length, 'riders=', riders.length);
 
   // Show loading state
   if (isLoading) {
-    console.log('AdminDashboard: Showing loading spinner');
     return (
-      <div style={{ 
-        position: 'fixed', 
-        top: 0, 
-        left: 0, 
-        right: 0, 
-        bottom: 0, 
-        backgroundColor: '#0f172a', 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        zIndex: 9999
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ 
-            width: '64px', 
-            height: '64px', 
-            border: '4px solid #10b981', 
-            borderTopColor: 'transparent', 
-            borderRadius: '50%', 
-            animation: 'spin 1s linear infinite',
-            margin: '0 auto 16px'
-          }}></div>
-          <div style={{ color: 'white', fontSize: '20px' }}>Loading Admin Dashboard...</div>
-          <div style={{ color: '#94a3b8', fontSize: '14px', marginTop: '8px' }}>Connecting to backend...</div>
+      <div className="h-screen w-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="text-white text-xl">Loading Admin Dashboard...</div>
+          <div className="text-slate-400 text-sm mt-2">Connecting to backend...</div>
         </div>
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     );
   }
 
   // Show error state
   if (error) {
-    console.log('AdminDashboard: Showing error state');
     return (
-      <div style={{ 
-        position: 'fixed', 
-        top: 0, 
-        left: 0, 
-        right: 0, 
-        bottom: 0, 
-        backgroundColor: '#0f172a', 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        zIndex: 9999
-      }}>
-        <div style={{ textAlign: 'center', maxWidth: '400px', padding: '32px' }}>
-          <div style={{ color: '#ef4444', fontSize: '20px', marginBottom: '16px' }}>⚠️ Error</div>
-          <div style={{ color: 'white', marginBottom: '24px' }}>{error}</div>
-          <button 
-            onClick={onBack} 
-            style={{ 
-              backgroundColor: '#10b981', 
-              color: 'white', 
-              padding: '8px 16px', 
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer'
-            }}
-          >
+      <div className="h-screen w-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center max-w-md p-8">
+          <div className="text-red-500 text-xl mb-4">⚠️ Error</div>
+          <div className="text-white mb-6">{error}</div>
+          <Button onClick={onBack} className="bg-emerald-500 hover:bg-emerald-600">
             Go Back
-          </button>
+          </Button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full w-full min-h-screen bg-slate-950 flex overflow-hidden">
+    <div className="h-screen w-screen bg-slate-950 flex overflow-hidden">
       {/* Mobile Menu Button */}
       <Button
         variant="ghost"
@@ -661,6 +620,13 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
         {/* Map Container */}
         <div className="flex-1 relative overflow-hidden">
           <div className="absolute inset-0 bg-slate-900">
+            {/* Temporarily disable map to test */}
+            {/* <div className="h-full w-full flex items-center justify-center text-white">
+              <div className="text-center">
+                <div className="text-2xl mb-2">🗺️ Map View</div>
+                <div className="text-slate-400">Orders: {filteredOrders.length} | Riders: {filteredRiders.length}</div>
+              </div>
+            </div> */}
             <MapComponent 
               orders={filteredOrders} 
               riders={filteredRiders} 

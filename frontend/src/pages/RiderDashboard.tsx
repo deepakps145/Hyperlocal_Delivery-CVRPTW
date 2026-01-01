@@ -11,7 +11,9 @@ import {
   RefreshCw,
   XCircle,
   Timer,
-  Truck
+  Truck,
+  Car,           // <--- Add this
+  AlertTriangle  // <--- Add this
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card } from '../ui/card';
@@ -377,9 +379,11 @@ export function RiderDashboard({ onBack }: RiderDashboardProps) {
         </div>
 
         {/* Route Stats Bar */}
+        {/* Route Stats Bar & Controls */}
         {allActiveOrders.length > 0 && (
-          <div className="px-4 py-3 bg-slate-800/30 border-b border-slate-800/50">
-            <div className="flex items-center justify-between">
+          <div className="bg-slate-800/30 border-b border-slate-800/50">
+            {/* Top Row: Stats */}
+            <div className="px-4 py-3 flex items-center justify-between border-b border-slate-800/30">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center">
@@ -402,14 +406,46 @@ export function RiderDashboard({ onBack }: RiderDashboardProps) {
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Bottom Row: Map Controls */}
+            <div className="px-2 py-2 flex gap-2 overflow-x-auto custom-scrollbar">
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleNavigate}
-                className={`h-8 px-3 text-xs ${showRoute ? 'bg-emerald-500/20 text-emerald-400' : 'text-slate-400'}`}
+                className={`flex-1 h-8 px-2 text-xs border ${
+                  showRoute 
+                    ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
+                    : 'border-transparent text-slate-400 hover:bg-slate-800'
+                }`}
               >
-                <Navigation className="w-3 h-3 mr-1" />
+                <Navigation className="w-3 h-3 mr-1.5" />
                 {showRoute ? 'Route On' : 'Show Route'}
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setAvoidTraffic(!avoidTraffic)}
+                className={`flex-1 h-8 px-2 text-xs border transition-all ${
+                  avoidTraffic 
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.1)]' 
+                    : 'border-transparent text-slate-400 hover:bg-slate-800'
+                }`}
+              >
+                <Car className="w-3 h-3 mr-1.5" />
+                {avoidTraffic ? 'Traffic: Avoid' : 'Traffic: Normal'}
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleReportTraffic}
+                className="h-8 px-2 text-xs text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20"
+                title="Report Heavy Traffic Here"
+              >
+                <AlertTriangle className="w-3 h-3" />
               </Button>
             </div>
           </div>
